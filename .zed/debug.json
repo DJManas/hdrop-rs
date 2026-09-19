@@ -1,0 +1,48 @@
+[
+  {
+    "adapter": "CodeLLDB",
+    "label": "hdrop, F12",
+    "request": "launch",
+    "program": "/home/djmanas/projects/rust/hdrop-rs/target/debug/hdrop-rs",
+    "cwd": "/home/djmanas/projects/rust/hdrop-rs",
+    "args": [
+      "-f",
+      "-w",
+      "100",
+      "-h",
+      "25",
+      "-g",
+      "36",
+      "--class",
+      "Guake",
+      "kitty"
+    ],
+    "build": {
+      "label": "cargo run -p hdrop-rs",
+      "command": "cargo",
+      "args": [
+        "build",
+        "--package",
+        "hdrop-rs"
+      ],
+      "env": {
+        "RUSTC_TOOLCHAIN": "/nix/store/9p935lylgncf4zfwvm2q7n8i87rhyc09-rust-default-1.96.0"
+      },
+      "cwd": "/home/djmanas/projects/rust/hdrop-rs",
+      "use_new_terminal": false,
+      "allow_concurrent_runs": false,
+      "reveal": "always",
+      "reveal_target": "dock",
+      "hide": "never",
+      "tags": [],
+      "shell": "system",
+      "show_summary": false,
+      "show_command": false,
+      "save": "none",
+      "hooks": []
+    },
+    "sourceLanguages": [
+      "rust"
+    ]
+  }
+]

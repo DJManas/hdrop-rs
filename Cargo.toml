@@ -1,0 +1,13 @@
+[package]
+name = "hdrop-rs"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+clap = { version = "4.6.1", features = ["derive"] }
+hyprland = { git = "https://github.com/hyprland-community/hyprland-rs", branch = "master" }
+notify-rust = "4.17.0"
+
+[lints.rust]
+non_snake_case = "allow"
