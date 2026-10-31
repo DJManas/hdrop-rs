@@ -4,11 +4,7 @@ use std::process;
 
 use clap::{CommandFactory, Parser, ArgAction};
 
-use hyprland::data::{Clients, Workspace};
-use hyprland::prelude::*;
-use hyprland::shared::{HyprData, HyprDataActive};
-
-use hdrop_rs::{applyFloatingRule, floatingPosition, focusWindow, launchForeground, launchInBackground, moveWindowToWorkspace, notifyError, notifyVerbose, repositionWindow, resizeWindow, resolveClass, waitOnline};
+use hdrop_rs::{applyFloatingRule, floatingPosition, focusWindow, getActiveWorkspace, getClients, launchForeground, launchInBackground, moveWindowToWorkspace, notifyError, notifyVerbose, repositionWindow, resizeWindow, resolveClass, waitOnline};
 
 /// Usage: hdrop [OPTIONS] [COMMAND]
 #[derive(Parser, Debug)]
@@ -93,14 +89,14 @@ fn run(args: &CliArgs) -> Result<(), Box<dyn std::error::Error>> {
     None
   };
 
-  let activeWorkspace = Workspace::get_active()?;
-  let clients = Clients::get()?;
+  let activeWorkspace = getActiveWorkspace()?;
+  let clients = getClients()?;
   let matchedClient = clients.iter().find(|client| client.class == class);
 
   match matchedClient {
-    Some(client) if client.workspace.name != activeWorkspace.name => {
+    Some(client) if client.workspace.address() != activeWorkspace.address() => {
       if !args.focus {
-        notifyOnError(moveWindowToWorkspace(&class, &activeWorkspace.name), "Error moving window to current workspace");
+        notifyOnError(moveWindowToWorkspace(&class, activeWorkspace.address()), "Error moving window to current workspace");
         if let Some(position) = &floatingPos {
           notifyOnError(resizeWindow(&class, position.widthPct, position.heightPct), "Error resizing window");
           notifyOnError(repositionWindow(&class, &args.position, position.widthPct, position.heightPct, args.gap), "Error repositioning window");

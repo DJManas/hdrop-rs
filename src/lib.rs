@@ -2,11 +2,68 @@
 
 use std::process;
 
-use hyprland::data::{Clients, Monitor};
 use hyprland::dispatch::*;
 use hyprland::prelude::*;
-use hyprland::shared::HyprData;
 use notify_rust::{Notification, Urgency};
+use serde::Deserialize;
+use serde::de::DeserializeOwned;
+
+/// Workspace reference as embedded in `hyprctl -j clients` and returned by `activeworkspace`.
+/// `id` is never read: since Hyprland 0.57 it's present for numbered workspaces only (missing for
+/// special/named ones, which broke hyprland-rs' structs). 0.57 also added `address`, the name to
+/// dispatch with, as `name` became a display name that can differ after a rename; 0.56 has no
+/// `address` and its `name` is the addressable one, hence the fallback.
+#[derive(Deserialize, Debug)]
+pub struct WorkspaceRef {
+  address: Option<String>,
+  name: String,
+}
+
+impl WorkspaceRef {
+  pub fn address(&self) -> &str {
+    self.address.as_deref().unwrap_or(&self.name)
+  }
+}
+
+/// The subset of `hyprctl -j clients` fields hdrop needs.
+#[derive(Deserialize, Debug)]
+pub struct Client {
+  pub class: String,
+  pub mapped: bool,
+  pub workspace: WorkspaceRef,
+}
+
+/// The subset of `hyprctl -j monitors` fields hdrop needs.
+#[derive(Deserialize, Debug)]
+pub struct Monitor {
+  pub width: u32,
+  pub height: u32,
+  pub scale: f32,
+  pub focused: bool,
+}
+
+/// Runs `hyprctl -j <command>` and deserializes only the fields `T` declares, so unrelated
+/// changes to Hyprland's JSON output don't break hdrop (hyprland-rs' full structs did, on 0.57).
+fn hyprctlJson<T: DeserializeOwned>(command: &str) -> Result<T, Box<dyn std::error::Error>> {
+  let output = process::Command::new("hyprctl").args(["-j", command]).output()?;
+  if !output.status.success() {
+    return Err(format!("hyprctl -j {command} failed: {}", String::from_utf8_lossy(&output.stderr)).into());
+  }
+  serde_json::from_slice(&output.stdout).map_err(|error| format!("hyprctl -j {command}: {error}").into())
+}
+
+pub fn getClients() -> Result<Vec<Client>, Box<dyn std::error::Error>> {
+  hyprctlJson("clients")
+}
+
+pub fn getActiveWorkspace() -> Result<WorkspaceRef, Box<dyn std::error::Error>> {
+  hyprctlJson("activeworkspace")
+}
+
+pub fn getActiveMonitor() -> Result<Monitor, Box<dyn std::error::Error>> {
+  let monitors: Vec<Monitor> = hyprctlJson("monitors")?;
+  monitors.into_iter().find(|monitor| monitor.focused).ok_or_else(|| "no focused monitor".into())
+}
 
 /// Shows a desktop notification for `message`, mirroring bash hdrop's `notify()`: try a D-Bus
 /// notification first, fall back to `hyprctl notify` if there's no notification daemon. Since
@@ -96,7 +153,7 @@ pub fn floatingPixelPosition(position: &str, widthPct: u16, heightPct: u16, gap:
 /// the active monitor's real geometry. See `floatingPixelPosition` for why this can't just reuse
 /// the `hl.window_rule` move string.
 pub fn repositionWindow(class: &str, position: &str, widthPct: u16, heightPct: u16, gap: u16) -> Result<(), Box<dyn std::error::Error>> {
-  let activeMonitor = Monitor::get_active()?;
+  let activeMonitor = getActiveMonitor()?;
   let monitorWidth = activeMonitor.width as f32 / activeMonitor.scale;
   let monitorHeight = activeMonitor.height as f32 / activeMonitor.scale;
   let (xPx, yPx) = floatingPixelPosition(position, widthPct, heightPct, gap, monitorWidth, monitorHeight)?;
@@ -149,7 +206,7 @@ pub fn caseInsensitiveContains(haystack: &str, needle: &str) -> bool {
 
 /// Finds the first currently open window whose class contains `pattern` (case insensitive).
 pub fn partialMatchClass(pattern: &str) -> Result<Option<String>, Box<dyn std::error::Error>> {
-  let clients = Clients::get()?;
+  let clients = getClients()?;
   Ok(clients.into_iter().find(|client| caseInsensitiveContains(&client.class, pattern)).map(|client| client.class))
 }
 
@@ -229,7 +286,7 @@ pub fn focusWindow(class: &str) -> hyprland::Result<()> {
 /// doesn't have `monitor_w`/`monitor_h` available like `hl.window_rule`'s `move` string does — so
 /// unlike the floating-rule position, this needs the active monitor's real geometry.
 pub fn resizeWindow(class: &str, widthPct: u16, heightPct: u16) -> Result<(), Box<dyn std::error::Error>> {
-  let activeMonitor = Monitor::get_active()?;
+  let activeMonitor = getActiveMonitor()?;
   let widthPx = (activeMonitor.width as f32 / activeMonitor.scale * widthPct as f32 / 100.0).round() as i32;
   let heightPx = (activeMonitor.height as f32 / activeMonitor.scale * heightPct as f32 / 100.0).round() as i32;
   let classPattern = escapeLuaDoubleQuoted(class);
@@ -345,5 +402,38 @@ mod tests {
   fn topLevelOverrideWinsOverEverythingElse() {
     assert_eq!(resolve(&["epiphany"], Some("Forced")), "Forced");
     assert_eq!(resolve(&["firefox", "--class", "Profile"], Some("Forced")), "Forced");
+  }
+
+  #[test]
+  fn clientOnSpecialWorkspaceWithoutIdDeserializes() {
+    // Shape of Hyprland 0.57 `hyprctl -j clients`: no "id" for non-numbered workspaces.
+    let json = r#"[{
+      "address": "0x55d0c1a2b3c0",
+      "mapped": true,
+      "workspace": {
+        "address": "special:hdrop",
+        "type": "special",
+        "name": "special:hdrop"
+      },
+      "class": "kitty"
+    }]"#;
+    let clients: Vec<Client> = serde_json::from_str(json).unwrap();
+    assert_eq!(clients[0].class, "kitty");
+    assert_eq!(clients[0].workspace.address(), "special:hdrop");
+  }
+
+  #[test]
+  fn renamedWorkspaceUsesAddressNotDisplayName() {
+    let json = r#"{"address": "3", "id": 3, "type": "numbered", "name": "mail"}"#;
+    let workspace: WorkspaceRef = serde_json::from_str(json).unwrap();
+    assert_eq!(workspace.address(), "3");
+  }
+
+  #[test]
+  fn hyprland056WorkspaceWithoutAddressFallsBackToName() {
+    // Shape of Hyprland 0.56 `hyprctl -j activeworkspace`: no "address" field yet.
+    let json = r#"{"id": -98, "name": "special:hdrop", "monitor": "DP-1"}"#;
+    let workspace: WorkspaceRef = serde_json::from_str(json).unwrap();
+    assert_eq!(workspace.address(), "special:hdrop");
   }
 }
